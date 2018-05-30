@@ -17,6 +17,8 @@ class TxOutputType(p.MessageType):
         5: ('multisig', MultisigRedeemScriptType, 0),
         6: ('op_return_data', p.BytesType, 0),
         7: ('decred_script_version', p.UVarintType, 0),
+        8: ('block_hash', p.BytesType, 0),
+        9: ('block_height', p.BytesType, 0),
     }
 
     def __init__(
@@ -27,7 +29,9 @@ class TxOutputType(p.MessageType):
         script_type: int = None,
         multisig: MultisigRedeemScriptType = None,
         op_return_data: bytes = None,
-        decred_script_version: int = None
+        decred_script_version: int = None,
+        block_hash: bytes = None,
+        block_height: bytes = None
     ) -> None:
         self.address = address
         self.address_n = address_n if address_n is not None else []
@@ -36,3 +40,5 @@ class TxOutputType(p.MessageType):
         self.multisig = multisig
         self.op_return_data = op_return_data
         self.decred_script_version = decred_script_version
+        self.block_hash = block_hash
+        self.block_height = block_height

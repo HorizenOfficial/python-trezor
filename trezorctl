@@ -526,6 +526,7 @@ def sign_tx(connect, coin):
         sequence = click.prompt('Sequence Number to use (RBF opt-in enabled by default)', type=int, default=0xfffffffd)
         script_type = click.prompt('Input type', type=CHOICE_INPUT_SCRIPT_TYPE, default=default_script_type(address_n))
         script_type = script_type if isinstance(script_type, int) else CHOICE_INPUT_SCRIPT_TYPE.typemap[script_type]
+        scriptPubKey = txapi.get_tx(str(binascii.hexlify(prev_hash))[2:-1]).bin_outputs[prev_index].script_pubkey
         inputs.append(proto.TxInputType(
             address_n=address_n,
             prev_hash=prev_hash,
@@ -533,6 +534,7 @@ def sign_tx(connect, coin):
             amount=amount,
             script_type=script_type,
             sequence=sequence,
+            prev_input_script=scriptPubKey,  #zen 
         ))
 
     outputs = []
@@ -549,11 +551,14 @@ def sign_tx(connect, coin):
         amount = click.prompt('Amount to spend (satoshis)', type=int)
         script_type = click.prompt('Output type', type=CHOICE_OUTPUT_SCRIPT_TYPE, default=default_script_type(address_n))
         script_type = script_type if isinstance(script_type, int) else CHOICE_OUTPUT_SCRIPT_TYPE.typemap[script_type]
+        (block_hash,block_height) = txapi.get_block(199) #optional , if miss -> using default block in firmaware side
         outputs.append(proto.TxOutputType(
             address_n=address_n,
             address=address,
             amount=amount,
             script_type=script_type,
+            block_hash = block_hash,
+            block_height = block_height
         ))
 
     tx_version = click.prompt('Transaction version', type=int, default=2)
