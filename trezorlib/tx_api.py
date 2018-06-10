@@ -37,6 +37,16 @@ class TxApi(object):
         url = '%s%s/%s' % (self.url, resource, resourceid)
         return url
 
+    def get_block(self,block_number): #currunt block - block_number
+        r = requests.get(self.url+'blocks/')
+        j = r.json(parse_float=str)
+        block_height =  j['blocks'][block_number]['height']
+        block_hash = j['blocks'][block_number]['hash']
+        block_hash_flipped = binascii.unhexlify("".join(reversed([block_hash[i:i+2] for i in range(0, len(block_hash), 2)])))
+        from struct import pack
+        block_height_flipped = pack('<L',block_height)
+        return block_hash_flipped , block_height_flipped 
+        
     def fetch_json(self, resource, resourceid):
         global cache_dir
         if cache_dir:
@@ -69,7 +79,7 @@ class TxApiInsight(TxApi):
     def __init__(self, network, url, zcash=None):
         super(TxApiInsight, self).__init__(network, url)
         self.zcash = zcash
-        self.pushtx_url = url.replace('/api/', '/tx/send')
+        self.pushtx_url = url.replace('/api/', '/tx/send').replace('/insight-api-zen/','/tx/send')
 
     def get_tx(self, txhash):
 
@@ -99,7 +109,9 @@ class TxApiInsight(TxApi):
             o.script_pubkey = binascii.unhexlify(vout['scriptPubKey']['hex'])
 
         if self.zcash:
-            if t.version == 2:
+            t.overwintered = data.get('fOverwintered', False)
+            t.expiry = data.get('nExpiryHeight', False)
+            if t.version >= 2:
                 joinsplit_cnt = len(data['vjoinsplit'])
                 if joinsplit_cnt == 0:
                     t.extra_data = b'\x00'
