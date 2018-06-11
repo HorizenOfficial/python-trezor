@@ -23,6 +23,8 @@
 import base64
 import binascii
 import click
+import hashlib
+import io
 import json
 import logging
 import os
@@ -280,9 +282,30 @@ def set_u2f_counter(connect, counter):
 
 
 @cli.command(help='Reset device to factory defaults and remove all private data.')
+@click.option('-b', '--bootloader', help='Wipe device in bootloader mode. This also erases the firmware.', is_flag=True)
 @click.pass_obj
-def wipe_device(connect):
-    return connect().wipe_device()
+def wipe_device(connect, bootloader):
+    client = connect()
+    if bootloader:
+        if not client.features.bootloader_mode:
+            click.echo('Please switch your device to bootloader mode.')
+            sys.exit(1)
+        else:
+            click.echo('Wiping user data and firmware. Please confirm on your device.')
+    else:
+        if client.features.bootloader_mode:
+            click.echo('Your device is in bootloader mode. This operation would also erase firmware.')
+            click.echo('Specify "--bootloader" if that is what you want, or disconnect and reconnect device in normal mode.')
+            click.echo('Aborting.')
+            sys.exit(1)
+        else:
+            click.echo('Wiping user data. Please confirm on your device.')
+
+    try:
+        return connect().wipe_device()
+    except CallException as e:
+        click.echo('Action failed: {} {}'.format(*e.args))
+        sys.exit(3)
 
 
 @cli.command(help='Load custom configuration to the device.')
@@ -387,9 +410,20 @@ def backup_device(connect):
 @click.option('-u', '--url')
 @click.option('-v', '--version')
 @click.option('-s', '--skip-check', is_flag=True)
-@click.option('-e', '--erase', is_flag=True)
+@click.option('--fingerprint', help='Expected firmware fingerprint in hex')
 @click.pass_obj
-def firmware_update(connect, filename, url, version, skip_check, erase):
+def firmware_update(connect, filename, url, version, skip_check, fingerprint):
+    if sum(bool(x) for x in (filename, url, version)) > 1:
+        click.echo("You can use only one of: firmware, url, version.")
+        sys.exit(1)
+
+    client = connect()
+    if not client.features.bootloader_mode:
+        click.echo("Please switch your device to bootloader mode.")
+        sys.exit(1)
+
+    firmware_version = client.features.major_version
+
     if filename:
         fp = open(filename, 'rb').read()
     elif url:
@@ -397,11 +431,9 @@ def firmware_update(connect, filename, url, version, skip_check, erase):
         click.echo('Downloading from', url)
         r = requests.get(url)
         fp = r.content
-    elif erase:
-        fp = 32768 * b'\xFF'
     else:
         import requests
-        r = requests.get('https://wallet.trezor.io/data/firmware/releases.json')
+        r = requests.get('https://wallet.trezor.io/data/firmware/{}/releases.json'.format(firmware_version))
         releases = r.json()
 
         def version_func(r):
@@ -411,26 +443,49 @@ def firmware_update(connect, filename, url, version, skip_check, erase):
             return '.'.join(map(str, version_func(r)))
 
         if version:
-            release = next((r for r in releases if version_string(r) == version))
+            try:
+                release = next(r for r in releases if version_string(r) == version)
+            except StopIteration:
+                click.echo("Version {} not found.".format(version))
+                sys.exit(1)
         else:
             release = max(releases, key=version_func)
             click.echo('Fetching version: %s' % version_string(release))
-        click.echo('Firmware fingerprint: %s' % release['fingerprint'])
+
+        if not fingerprint:
+            fingerprint = release['fingerprint']
         url = 'https://wallet.trezor.io/' + release['url']
         click.echo('Downloading from %s' % url)
         r = requests.get(url)
         fp = r.content
 
-    if not skip_check and not erase:
+    if not skip_check:
         if fp[:8] == b'54525a52' or fp[:8] == b'54525a56':
             fp = binascii.unhexlify(fp)
         if fp[:4] != b'TRZR' and fp[:4] != b'TRZV':
-            raise CallException(proto.FailureType.FirmwareError, 'TREZOR firmware header expected')
+            click.echo("Trezor firmware header expected.")
+            sys.exit(2)
+
+        if fingerprint and firmware_version > 1:
+            click.echo("Checking Trezor T fingerprint is not supported yet.")
+        elif firmware_version == 1:
+            calculated_fingerprint = hashlib.sha256(fp[256:]).hexdigest()
+            click.echo("Firmware fingerprint: {}".format(calculated_fingerprint))
+            if fingerprint and fingerprint != calculated_fingerprint:
+                click.echo("Expected fingerprint: {}".format(fingerprint))
+                click.echo("Fingerprints do not match, aborting.")
+                sys.exit(5)
 
     click.echo('Please confirm action on device...')
 
-    from io import BytesIO
-    return connect().firmware_update(fp=BytesIO(fp))
+    try:
+        return client.firmware_update(fp=io.BytesIO(fp))
+    except CallException as e:
+        if e.args[0] in (proto.FailureType.FirmwareError, proto.FailureType.ActionCancelled):
+            click.echo("Update aborted on device.")
+        else:
+            click.echo("Update failed: {} {}".format(*e.args))
+        sys.exit(3)
 
 
 @cli.command(help='Perform a self-test.')
@@ -526,6 +581,7 @@ def sign_tx(connect, coin):
         sequence = click.prompt('Sequence Number to use (RBF opt-in enabled by default)', type=int, default=0xfffffffd)
         script_type = click.prompt('Input type', type=CHOICE_INPUT_SCRIPT_TYPE, default=default_script_type(address_n))
         script_type = script_type if isinstance(script_type, int) else CHOICE_INPUT_SCRIPT_TYPE.typemap[script_type]
+        scriptPubKey = txapi.get_tx(str(binascii.hexlify(prev_hash))[2:-1]).bin_outputs[prev_index].script_pubkey
         inputs.append(proto.TxInputType(
             address_n=address_n,
             prev_hash=prev_hash,
@@ -533,6 +589,7 @@ def sign_tx(connect, coin):
             amount=amount,
             script_type=script_type,
             sequence=sequence,
+            prev_input_script=scriptPubKey,  #zen 
         ))
 
     outputs = []
@@ -549,17 +606,20 @@ def sign_tx(connect, coin):
         amount = click.prompt('Amount to spend (satoshis)', type=int)
         script_type = click.prompt('Output type', type=CHOICE_OUTPUT_SCRIPT_TYPE, default=default_script_type(address_n))
         script_type = script_type if isinstance(script_type, int) else CHOICE_OUTPUT_SCRIPT_TYPE.typemap[script_type]
+        (block_hash,block_height) = txapi.get_block(199) #optional , if miss -> using default block in firmaware side
         outputs.append(proto.TxOutputType(
             address_n=address_n,
             address=address,
             amount=amount,
             script_type=script_type,
+            block_hash = block_hash,
+            block_height = block_height
         ))
 
     tx_version = click.prompt('Transaction version', type=int, default=2)
     tx_locktime = click.prompt('Transaction locktime', type=int, default=0)
 
-    (signatures, serialized_tx) = client.sign_tx(coin, inputs, outputs, tx_version, tx_locktime)
+    _, serialized_tx = client.sign_tx(coin, inputs, outputs, tx_version, tx_locktime)
 
     client.close()
 
@@ -757,7 +817,7 @@ def ethereum_sign_tx(connect, host, chain_id, address, value, gas_limit, gas_pri
     if ' ' in value:
         value, unit = value.split(' ', 1)
         if unit.lower() not in ether_units:
-            raise CallException(proto.Failure_DataError, 'Unrecognized ether unit %r' % unit)
+            raise CallException(proto.Failure.DataError, 'Unrecognized ether unit %r' % unit)
         value = int(value) * ether_units[unit.lower()]
     else:
         value = int(value)
@@ -766,7 +826,7 @@ def ethereum_sign_tx(connect, host, chain_id, address, value, gas_limit, gas_pri
         if ' ' in gas_price:
             gas_price, unit = gas_price.split(' ', 1)
             if unit.lower() not in ether_units:
-                raise CallException(proto.Failure_DataError, 'Unrecognized gas price unit %r' % unit)
+                raise CallException(proto.Failure.DataError, 'Unrecognized gas price unit %r' % unit)
             gas_price = int(gas_price) * ether_units[unit.lower()]
         else:
             gas_price = int(gas_price)
@@ -911,6 +971,33 @@ def lisk_sign_tx(connect, address, file):
     return payload
 
 
+@cli.command(help='Sign message with Lisk address.')
+@click.option('-n', '--address', required=True, help="BIP-32 path, e.g. m/44'/134'/0'/0'")
+@click.argument('message')
+@click.pass_obj
+def lisk_sign_message(connect, address, message):
+    client = connect()
+    address_n = client.expand_path(address)
+    res = client.lisk_sign_message(address_n, message)
+    output = {
+        "message": message,
+        "public_key": binascii.hexlify(res.public_key).decode(),
+        "signature": binascii.hexlify(res.signature).decode()
+    }
+    return output
+
+
+@cli.command(help='Verify message signed with Lisk address.')
+@click.argument('pubkey')
+@click.argument('signature')
+@click.argument('message')
+@click.pass_obj
+def lisk_verify_message(connect, pubkey, signature, message):
+    signature = bytes.fromhex(signature)
+    pubkey = bytes.fromhex(pubkey)
+    return connect().lisk_verify_message(pubkey, signature, message)
+
+
 #
 # CoSi functions
 #
@@ -971,4 +1058,4 @@ def stellar_sign_transaction(connect, b64envelope, address, network_passphrase):
 
 
 if __name__ == '__main__':
-    cli()
+    cli()  # pylint: disable=E1120
