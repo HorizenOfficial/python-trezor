@@ -21,6 +21,7 @@ from trezorlib import tx_api
 
 TxApiBitcoin = coins.tx_api['Bitcoin']
 TxApiTestnet = coins.tx_api['Testnet']
+TxApiZencash = coins.tx_api['Zencash']
 
 tests_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,3 +43,6 @@ def test_tx_api_gettx():
 
     TxApiTestnet.get_tx('6f90f3c7cbec2258b0971056ef3fe34128dbde30daa9c0639a898f9977299d54')
     TxApiTestnet.get_tx('d6da21677d7cca5f42fbc7631d062c9ae918a0254f7c6c22de8e8cb7fd5b8236')
+
+    TxApiZencash.get_tx('f7294424486d18d1d59f774fcc1acfd21d19ae53a313dfd2901682ae6035670c')
+    TxApiZencash.get_tx('e04e6deaaac430d56384c6bade9381cb03290e5aa181058f5264e436179356f3')

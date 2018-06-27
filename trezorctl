@@ -575,6 +575,14 @@ def sign_tx(connect, coin):
         sequence = click.prompt('Sequence Number to use (RBF opt-in enabled by default)', type=int, default=0xfffffffd)
         script_type = click.prompt('Input type', type=CHOICE_INPUT_SCRIPT_TYPE, default=default_script_type(address_n))
         script_type = script_type if isinstance(script_type, int) else CHOICE_INPUT_SCRIPT_TYPE.typemap[script_type]
+        
+        if(coin == "Zencash"):
+            scriptPubKey = txapi.get_tx(str(binascii.hexlify(prev_hash))[2:-1]).bin_outputs[prev_index].script_pubkey
+            scriptPubKey = str(binascii.hexlify(scriptPubKey))[2:-1]
+            if(len(scriptPubKey)==126 and scriptPubKey[-2:]=="b4"):
+                prev_blockhash = binascii.unhexlify(scriptPubKey[-74:-10])
+                prev_blockheight = binascii.unhexlify(scriptPubKey[-8:-2])
+                    
         inputs.append(proto.TxInputType(
             address_n=address_n,
             prev_hash=prev_hash,
@@ -582,6 +590,8 @@ def sign_tx(connect, coin):
             amount=amount,
             script_type=script_type,
             sequence=sequence,
+            prev_block_hash_bip115=prev_blockhash,
+            prev_block_height_bip115=prev_blockheight, 
         ))
 
     outputs = []
@@ -598,11 +608,14 @@ def sign_tx(connect, coin):
         amount = click.prompt('Amount to spend (satoshis)', type=int)
         script_type = click.prompt('Output type', type=CHOICE_OUTPUT_SCRIPT_TYPE, default=default_script_type(address_n))
         script_type = script_type if isinstance(script_type, int) else CHOICE_OUTPUT_SCRIPT_TYPE.typemap[script_type]
+        (block_hash,block_height) = txapi.get_block(300) 
         outputs.append(proto.TxOutputType(
             address_n=address_n,
             address=address,
             amount=amount,
             script_type=script_type,
+            block_hash_bip115 = block_hash,
+            block_height_bip115 = block_height
         ))
 
     tx_version = click.prompt('Transaction version', type=int, default=2)
